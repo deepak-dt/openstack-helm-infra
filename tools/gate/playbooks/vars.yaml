@@ -42,7 +42,9 @@ nodes:
         value: enabled
       - name: openstack-compute-node
         value: enabled
-      - name: openvswitch
+      # Deepak- name: openvswitch
+      #  value: enabled
+      - name: opencontrail
         value: enabled
       - name: ceph-mon
         value: enabled
