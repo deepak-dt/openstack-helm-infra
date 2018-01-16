@@ -44,7 +44,7 @@ nodes:
         value: enabled
       # Deepak- name: openvswitch
       #  value: enabled
-      - name: opencontrail
+      - name: opencontrail.org/controller
         value: enabled
       - name: ceph-mon
         value: enabled
