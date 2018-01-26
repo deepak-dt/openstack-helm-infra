@@ -43,8 +43,10 @@ nodes:
         value: enabled
       - name: openstack-compute-node
         value: enabled
-      - name: openvswitch
-        value: enabled
+      # Deepak- name: openvswitch
+      #  value: enabled
+      - name: opencontrail.org/controller
+         value: enabled
       - name: ceph-mon
         value: enabled
       - name: ceph-osd
