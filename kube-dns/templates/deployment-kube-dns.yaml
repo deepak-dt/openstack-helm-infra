@@ -16,13 +16,8 @@ limitations under the License.
 
 {{- if .Values.manifests.deployment_kube_dns }}
 {{- $envAll := . }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.kube_dns .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.kube_dns -}}
-{{- end -}}
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:

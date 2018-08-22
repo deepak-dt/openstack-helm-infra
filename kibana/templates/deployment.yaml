@@ -16,38 +16,39 @@ limitations under the License.
 
 {{- if .Values.manifests.deployment }}
 {{- $envAll := . }}
+
 {{- $esUserSecret := .Values.secrets.elasticsearch.user }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.kibana .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.kibana -}}
-{{- end -}}
 
 {{- $serviceAccountName := "kibana" }}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{ tuple $envAll "kibana" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kibana
+  labels:
+{{ tuple $envAll "kibana" "dashboard" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
   replicas: {{ .Values.pod.replicas.kibana }}
+  selector:
+    matchLabels:
+{{ tuple $envAll "kibana" "dashboard" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
 {{ tuple $envAll | include "helm-toolkit.snippets.kubernetes_upgrades_deployment" | indent 2 }}
   template:
     metadata:
       labels:
 {{ tuple $envAll "kibana" "dashboard" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 8 }}
       annotations:
-        configmap-etc-hash: {{ tuple "configmap-etc.yaml" . | include "helm-toolkit.utils.hash" }}
         configmap-bin-hash: {{ tuple "configmap-bin.yaml" . | include "helm-toolkit.utils.hash" }}
+        configmap-etc-hash: {{ tuple "configmap-etc.yaml" . | include "helm-toolkit.utils.hash" }}
     spec:
       serviceAccountName: {{ $serviceAccountName }}
       affinity:
 {{ tuple $envAll "kibana" "dashboard" | include "helm-toolkit.snippets.kubernetes_pod_anti_affinity" | indent 8 }}
       nodeSelector:
-        {{ .Values.labels.kibana.node_selector_key }}: {{ .Values.labels.kibana.node_selector_value }}
+        {{ .Values.labels.kibana.node_selector_key }}: {{ .Values.labels.kibana.node_selector_value | quote }}
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "kibana" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
       containers:
         - name: apache-proxy
 {{ tuple $envAll "apache_proxy" | include "helm-toolkit.snippets.image" | indent 10 }}
@@ -57,20 +58,23 @@ spec:
             - start
           ports:
             - name: http
-              containerPort: 80
+              containerPort: {{ tuple "kibana" "internal" "http" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ tuple "kibana" "internal" "http" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+            initialDelaySeconds: 20
+            periodSeconds: 10
           env:
-            - name: KIBANA_PORT
-              value: {{ tuple "kibana" "internal" "kibana" . | include "helm-toolkit.endpoints.endpoint_port_lookup" | quote }}
-            - name: KIBANA_USERNAME
+            - name: ELASTICSEARCH_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: kibana-admin-creds
-                  key: KIBANA_USERNAME
-            - name: KIBANA_PASSWORD
+                  name: {{ $esUserSecret }}
+                  key: ELASTICSEARCH_USERNAME
+            - name: ELASTICSEARCH_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: kibana-admin-creds
-                  key: KIBANA_PASSWORD
+                  name: {{ $esUserSecret }}
+                  key: ELASTICSEARCH_PASSWORD
           volumeMounts:
             - name: kibana-bin
               mountPath: /tmp/apache.sh
@@ -80,12 +84,6 @@ spec:
               mountPath: /usr/local/apache2/conf/httpd.conf
               subPath: httpd.conf
               readOnly: true
-            - name: pod-etc-apache
-              mountPath: /usr/local/apache2/conf/sites-enabled
-            - name: kibana-etc
-              mountPath: /usr/local/apache2/conf/sites-enabled/kibana-host.conf
-              subPath: kibana-host.conf
-              readOnly: true
         - name: kibana
 {{ tuple $envAll "kibana" | include "helm-toolkit.snippets.image" | indent 10 }}
 {{ tuple $envAll $envAll.Values.pod.resources.kibana | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
@@ -94,7 +92,7 @@ spec:
             - start
           ports:
             - name: kibana
-              containerPort: {{ .Values.network.kibana.port }}
+              containerPort: {{ tuple "kibana" "internal" "kibana" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
           env:
             - name: ELASTICSEARCH_URL
               value: {{ tuple "elasticsearch" "default" "client" . | include "helm-toolkit.endpoints.keystone_endpoint_uri_lookup" }}

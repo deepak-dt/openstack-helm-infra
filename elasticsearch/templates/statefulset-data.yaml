@@ -16,16 +16,11 @@ limitations under the License.
 
 {{- if .Values.manifests.statefulset_data }}
 {{- $envAll := . }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.elasticsearch_data .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.elasticsearch_data -}}
-{{- end -}}
 
 {{- $mounts_elasticsearch := .Values.pod.mounts.elasticsearch.elasticsearch }}
 
-{{- $serviceAccountName := "elasticsearch-data"}}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{- $serviceAccountName := printf "%s-%s" .Release.Name "elasticsearch-data"}}
+{{ tuple $envAll "elasticsearch_data" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1beta1
 kind: ClusterRoleBinding
@@ -62,13 +57,18 @@ rules:
     verbs:
     - get
 ---
-apiVersion: apps/v1beta1
+apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: elasticsearch-data
+  labels:
+{{ tuple $envAll "elasticsearch" "data" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
   serviceName: {{ tuple "elasticsearch" "data" . | include "helm-toolkit.endpoints.hostname_short_endpoint_lookup" }}
   replicas: {{ .Values.pod.replicas.data }}
+  selector:
+    matchLabels:
+{{ tuple $envAll "elasticsearch" "data" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
   template:
     metadata:
       labels:
@@ -77,14 +77,17 @@ spec:
       serviceAccountName: {{ $serviceAccountName }}
       affinity:
 {{ tuple $envAll "elasticsearch" "data" | include "helm-toolkit.snippets.kubernetes_pod_anti_affinity" | indent 8 }}
+      nodeSelector:
+        {{ .Values.labels.elasticsearch.node_selector_key }}: {{ .Values.labels.elasticsearch.node_selector_value | quote }}
       terminationGracePeriodSeconds: {{ .Values.pod.lifecycle.termination_grace_period.data.timeout | default "600" }}
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "elasticsearch_data" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container"  | indent 8 }}
         - name: memory-map-increase
+{{ tuple $envAll "memory_init" | include "helm-toolkit.snippets.image" | indent 10 }}
+{{ tuple $envAll $envAll.Values.pod.resources.data | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           securityContext:
             privileged: true
             runAsUser: 0
-{{ tuple $envAll "memory_init" | include "helm-toolkit.snippets.image" | indent 10 }}
           command:
             - sysctl
             - -w
@@ -92,9 +95,9 @@ spec:
 {{ if .Values.storage.filesystem_repository.enabled }}
         - name: elasticsearch-repository-perms
 {{ tuple $envAll "elasticsearch" | include "helm-toolkit.snippets.image" | indent 10 }}
+{{ tuple $envAll $envAll.Values.pod.resources.data | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           securityContext:
             runAsUser: 0
-{{ tuple $envAll $envAll.Values.pod.resources.client | include "helm-toolkit.snippets.kubernetes_resources" | indent 8 }}
           command:
             - chown
             - -R
@@ -106,17 +109,17 @@ spec:
 {{ end }}
       containers:
         - name: elasticsearch-data
+{{ tuple $envAll "elasticsearch" | include "helm-toolkit.snippets.image" | indent 10 }}
+{{ tuple $envAll $envAll.Values.pod.resources.data | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           securityContext:
             privileged: true
             capabilities:
               add:
                 - IPC_LOCK
                 - SYS_RESOURCE
-{{ tuple $envAll "elasticsearch" | include "helm-toolkit.snippets.image" | indent 10 }}
-{{ tuple $envAll $envAll.Values.pod.resources.data | include "helm-toolkit.snippets.kubernetes_resources" | indent 8 }}
           command:
-          - /tmp/elasticsearch.sh
-          - start
+            - /tmp/elasticsearch.sh
+            - start
           lifecycle:
             preStop:
               exec:
@@ -125,10 +128,10 @@ spec:
                   - stop
           ports:
             - name: transport
-              containerPort: {{ .Values.network.data.port }}
-          livenessProbe:
+              containerPort: {{ tuple "elasticsearch" "internal" "discovery" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+          readinessProbe:
             tcpSocket:
-              port: {{ .Values.network.discovery.port }}
+              port: {{ tuple "elasticsearch" "internal" "discovery" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
             initialDelaySeconds: 20
             periodSeconds: 10
           env:
@@ -177,12 +180,12 @@ spec:
       volumes:
         - name: elasticsearch-logs
           emptyDir: {}
+        - name: elasticsearch-config
+          emptyDir: {}
         - name: elasticsearch-bin
           configMap:
             name: elasticsearch-bin
             defaultMode: 0555
-        - name: elasticsearch-config
-          emptyDir: {}
         - name: elasticsearch-etc
           configMap:
             name: elasticsearch-etc

@@ -16,17 +16,11 @@ limitations under the License.
 
 {{- if .Values.manifests.daemonset_fluentbit }}
 {{- $envAll := . }}
-{{- $dependencies := .Values.dependencies.fluentbit }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.fluentbit .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.fluentbit -}}
-{{- end -}}
 
 {{- $mounts_fluentbit := .Values.pod.mounts.fluentbit.fluentbit }}
 
-{{- $serviceAccountName := "fluentbit"}}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{- $serviceAccountName := printf "%s-%s" .Release.Name "fluentbit" }}
+{{ tuple $envAll "fluentbit" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1beta1
 kind: ClusterRoleBinding
@@ -78,11 +72,16 @@ rules:
       - list
       - watch
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: fluentbit
+  labels:
+{{ tuple $envAll "fluentbit" "daemon" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
+  selector:
+    matchLabels:
+{{ tuple $envAll "fluentbit" "daemon" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
 {{ tuple $envAll "fluentbit" | include "helm-toolkit.snippets.kubernetes_upgrades_daemonset" | indent 2 }}
   template:
     metadata:
@@ -93,17 +92,15 @@ spec:
     spec:
       serviceAccountName: {{ $serviceAccountName }}
       nodeSelector:
-        {{ .Values.labels.fluentbit.node_selector_key }}: {{ .Values.labels.fluentbit.node_selector_value }}
+        {{ .Values.labels.fluentbit.node_selector_key }}: {{ .Values.labels.fluentbit.node_selector_value | quote }}
       hostNetwork: true
       hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "fluentbit" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
       containers:
         - name: fluentbit
-          env:
-          image: {{ .Values.images.tags.fluentbit }}
-          imagePullPolicy: {{ .Values.images.pull_policy }}
+{{ tuple $envAll "fluentbit" | include "helm-toolkit.snippets.image" | indent 10 }}
 {{ tuple $envAll $envAll.Values.pod.resources.fluentbit | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           command:
             - /tmp/fluent-bit.sh
@@ -130,7 +127,7 @@ spec:
               mountPath: /fluent-bit/etc/parsers.conf
               subPath: parsers.conf
               readOnly: true
-{{ if $mounts_fluentbit.volumeMounts }}{{ toYaml $mounts_fluentbit.volumeMounts | indent 8 }}{{ end }}
+{{ if $mounts_fluentbit.volumeMounts }}{{ toYaml $mounts_fluentbit.volumeMounts | indent 12 }}{{ end }}
       volumes:
         - name: varlog
           hostPath:

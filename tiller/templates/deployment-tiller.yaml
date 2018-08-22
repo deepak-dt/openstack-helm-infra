@@ -16,16 +16,24 @@ limitations under the License.
 
 {{- if .Values.manifests.deployment_tiller }}
 {{- $envAll := . }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.tiller .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.tiller -}}
-{{- end -}}
 
-{{- $serviceAccountName := "tiller"}}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{- $serviceAccountName := printf "%s-%s" .Release.Name "tiller" }}
+{{ tuple $envAll "tiller" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
-apiVersion: extensions/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $serviceAccountName }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: {{ $serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
@@ -50,7 +58,7 @@ spec:
         name: tiller
     spec:
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "tiller" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
       containers:
       - env:
         - name: TILLER_NAMESPACE
@@ -72,6 +80,9 @@ spec:
         ports:
         - containerPort: 44134
           name: tiller
+          protocol: TCP
+        - containerPort: 44135
+          name: metrics
           protocol: TCP
         readinessProbe:
           failureThreshold: 3

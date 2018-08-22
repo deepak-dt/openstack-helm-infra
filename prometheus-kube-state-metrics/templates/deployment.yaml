@@ -16,21 +16,90 @@ limitations under the License.
 
 {{- if .Values.manifests.deployment }}
 {{- $envAll := . }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.kube_state_metrics .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.kube_state_metrics -}}
-{{- end -}}
 
-{{- $serviceAccountName := "kube-state-metrics"}}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{- $serviceAccountName := printf "%s-%s" .Release.Name "kube-state-metrics"}}
+{{ tuple $envAll "kube_state_metrics" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
-apiVersion: extensions/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: {{ $serviceAccountName }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - secrets
+      - nodes
+      - pods
+      - services
+      - resourcequotas
+      - replicationcontrollers
+      - limitranges
+      - persistentvolumeclaims
+      - persistentvolumes
+      - namespaces
+      - endpoints
+    verbs:
+      - list
+      - watch
+  - apiGroups:
+      - extensions
+    resources:
+      - daemonsets
+      - deployments
+      - replicasets
+    verbs:
+      - list
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - batch
+    resources:
+      - cronjobs
+      - jobs
+    verbs:
+      - list
+      - watch
+  - apiGroups:
+      - autoscaling
+    resources:
+      - horizontalpodautoscalers
+    verbs:
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $serviceAccountName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ $envAll.Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ $serviceAccountName }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kube-state-metrics
+  labels:
+{{ tuple $envAll "kube-state-metrics" "exporter" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
   replicas: {{ .Values.pod.replicas.kube_state_metrics }}
+  selector:
+    matchLabels:
+{{ tuple $envAll "kube-state-metrics" "exporter" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
 {{ tuple $envAll | include "helm-toolkit.snippets.kubernetes_upgrades_deployment" | indent 2 }}
   template:
     metadata:
@@ -39,15 +108,33 @@ spec:
     spec:
       serviceAccountName: {{ $serviceAccountName }}
       nodeSelector:
-        {{ .Values.labels.node_selector_key }}: {{ .Values.labels.node_selector_value }}
+        {{ .Values.labels.kube_state_metrics.node_selector_key }}: {{ .Values.labels.kube_state_metrics.node_selector_value | quote }}
       terminationGracePeriodSeconds: {{ .Values.pod.lifecycle.termination_grace_period.kube_state_metrics.timeout | default "30" }}
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "kube_state_metrics" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
       containers:
         - name: kube-state-metrics
 {{ tuple $envAll "kube_state_metrics" | include "helm-toolkit.snippets.image" | indent 10 }}
 {{ tuple $envAll $envAll.Values.pod.resources.kube_state_metrics | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
+          command:
+            - /tmp/kube-state-metrics.sh
           ports:
             - name: metrics
-              containerPort: {{ .Values.network.kube_state_metrics.port }}
+              containerPort: {{ tuple "kube_state_metrics" "internal" "http" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: {{ tuple "kube_state_metrics" "internal" "http" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - name: kube-state-metrics-bin
+              mountPath: /tmp/kube-state-metrics.sh
+              subPath: kube-state-metrics.sh
+              readOnly: true
+      volumes:
+        - name: kube-state-metrics-bin
+          configMap:
+            name: kube-state-metrics-bin
+            defaultMode: 0555
 {{- end }}

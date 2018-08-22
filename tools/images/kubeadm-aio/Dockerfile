@@ -12,21 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#https://github.com/kubernetes/kubernetes/tree/master/build/debian-base
-FROM gcr.io/google-containers/debian-base-amd64:0.3
+FROM docker.io/ubuntu:xenial
 MAINTAINER pete.birley@att.com
 
-ARG KUBE_VERSION="v1.8.3"
+ARG UBUNTU_URL=http://archive.ubuntu.com/ubuntu/
+ARG ALLOW_UNAUTHENTICATED=false
+ARG PIP_INDEX_URL=https://pypi.python.org/simple/
+ARG PIP_TRUSTED_HOST=pypi.python.org
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+ENV PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
+
+COPY ./tools/images/kubeadm-aio/sources.list /etc/apt/
+RUN sed -i \
+        -e "s|%%UBUNTU_URL%%|${UBUNTU_URL}|g" \
+        /etc/apt/sources.list ;\
+    echo "APT::Get::AllowUnauthenticated \"${ALLOW_UNAUTHENTICATED}\";" > /etc/apt/apt.conf.d/allow-unathenticated
+
+ARG KUBE_VERSION="v1.10.6"
 ENV KUBE_VERSION ${KUBE_VERSION}
 
 ARG CNI_VERSION="v0.6.0"
 ENV CNI_VERSION ${CNI_VERSION}
 
-ARG HELM_VERSION="v2.7.0"
+ARG HELM_VERSION="v2.9.1"
 ENV HELM_VERSION ${HELM_VERSION}
 
-ARG CHARTS="calico,flannel,tiller,kube-dns"
+ARG CHARTS="calico,flannel,tiller,kube-dns,kubernetes-keystone-webhook"
 ENV CHARTS ${CHARTS}
+
+ARG HTTP_PROXY=""
+ENV HTTP_PROXY ${HTTP_PROXY}
+ENV http_proxy ${HTTP_PROXY}
+
+ARG HTTPS_PROXY=""
+ENV HTTPS_PROXY ${HTTPS_PROXY}
+ENV https_proxy ${HTTPS_PROXY}
+
+ARG NO_PROXY="127.0.0.1,localhost,.svc.cluster.local"
+ENV NO_PROXY ${NO_PROXY}
+ENV no_proxy ${NO_PROXY}
 
 ENV container="docker" \
     DEBIAN_FRONTEND="noninteractive" \
@@ -43,9 +67,15 @@ RUN set -ex ;\
         python-pip \
         gawk ;\
     pip --no-cache-dir install --upgrade pip ;\
+    hash -r ;\
     pip --no-cache-dir install setuptools ;\
     pip --no-cache-dir install kubernetes ;\
-    pip --no-cache-dir install ansible ;\
+
+    # NOTE(srwilkers): Pinning ansible to 2.5.5, as pip installs 2.6 by default.
+    # 2.6 introduces a new command flag (init) for the docker_container module
+    # that is incompatible with what we have currently. 2.5.5 ensures we match
+    # what's deployed in the gates
+    pip --no-cache-dir install "ansible==2.5.5" ;\
     for BINARY in kubectl kubeadm; do \
       curl -sSL -o /usr/bin/${BINARY} \
         https://storage.googleapis.com/kubernetes-release/release/${KUBE_VERSION}/bin/linux/amd64/${BINARY} ;\

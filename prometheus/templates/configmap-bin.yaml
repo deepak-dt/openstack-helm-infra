@@ -22,10 +22,12 @@ kind: ConfigMap
 metadata:
   name: prometheus-bin
 data:
+  apache.sh: |
+{{ tuple "bin/_apache.sh.tpl" . | include "helm-toolkit.utils.template" | indent 4 }}
   prometheus.sh: |
 {{ tuple "bin/_prometheus.sh.tpl" . | include "helm-toolkit.utils.template" | indent 4 }}
   helm-tests.sh: |
 {{ tuple "bin/_helm-tests.sh.tpl" . | include "helm-toolkit.utils.template" | indent 4 }}
-  image-repo-sync.sh: |+
+  image-repo-sync.sh: |
 {{- include "helm-toolkit.scripts.image_repo_sync" . | indent 4 }}
 {{- end }}

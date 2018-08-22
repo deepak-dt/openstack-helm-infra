@@ -19,7 +19,7 @@
 images:
   tags:
     node_exporter: docker.io/prom/node-exporter:v0.15.0
-    dep_check: quay.io/stackanetes/kubernetes-entrypoint:v0.2.1
+    dep_check: quay.io/stackanetes/kubernetes-entrypoint:v0.3.1
     image_repo_sync: docker.io/docker:17.07.0
   pull_policy: IfNotPresent
   local_registry:
@@ -29,16 +29,20 @@ images:
       - image_repo_sync
 
 labels:
-  node_selector_key: openstack-control-plane
-  node_selector_value: enabled
+  node_exporter:
+    node_selector_key: openstack-control-plane
+    node_selector_value: enabled
+  job:
+    node_selector_key: openstack-control-plane
+    node_selector_value: enabled
 
 pod:
   affinity:
-      anti:
-        type:
-          default: preferredDuringSchedulingIgnoredDuringExecution
-        topologyKey:
-          default: kubernetes.io/hostname
+    anti:
+      type:
+        default: preferredDuringSchedulingIgnoredDuringExecution
+      topologyKey:
+        default: kubernetes.io/hostname
   mounts:
     node_exporter:
       node_exporter:
@@ -77,30 +81,27 @@ pod:
           cpu: "2000m"
 
 dependencies:
-  node_exporter:
-    services: null
-  image_repo_sync:
-    services:
-      - service: local_image_registry
-        endpoint: internal
-
-conditional_dependencies:
-  local_image_registry:
-    jobs:
-      - node-exporter-image-repo-sync
-    services:
-      - service: local_image_registry
-        endpoint: node
+  dynamic:
+    common:
+      local_image_registry:
+        jobs:
+          - node-exporter-image-repo-sync
+        services:
+          - endpoint: node
+            service: local_image_registry
+  static:
+    image_repo_sync:
+      services:
+        - endpoint: internal
+          service: local_image_registry
+    node_exporter:
+      services: null
 
 monitoring:
   prometheus:
     enabled: true
     node_exporter:
       scrape: true
-
-network:
-  node_exporter:
-    port: 9100
 
 endpoints:
   cluster_domain_suffix: cluster.local
@@ -129,12 +130,12 @@ endpoints:
     port:
       metrics:
         default: 9100
-      prometheus_port:
-        default: 9100
 
 manifests:
   configmap_bin: true
-  clusterrolebinding: true
   daemonset: true
   job_image_repo_sync: true
   service: true
+
+conf:
+  ntp_server_ip: 127.0.0.1

@@ -16,25 +16,67 @@ limitations under the License.
 
 {{- if .Values.manifests.statefulset_prometheus }}
 {{- $envAll := . }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.prometheus .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.prometheus -}}
-{{- end -}}
 
 {{- $mounts_prometheus := .Values.pod.mounts.prometheus.prometheus }}
 {{- $mounts_prometheus_init := .Values.pod.mounts.prometheus.init_container }}
+{{- $promUserSecret := .Values.secrets.prometheus.admin }}
 
-{{- $serviceAccountName := "prometheus"}}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{- $serviceAccountName := printf "%s-%s" .Release.Name "prometheus"}}
+{{ tuple $envAll "prometheus" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
-apiVersion: apps/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: {{ $serviceAccountName }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+      - nodes/proxy
+      - services
+      - endpoints
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+  - nonResourceURLs:
+      - "/metrics"
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $serviceAccountName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ $serviceAccountName }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: prometheus
+  labels:
+{{ tuple $envAll "prometheus" "api" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
   serviceName: {{ tuple "monitoring" "internal" . | include "helm-toolkit.endpoints.hostname_short_endpoint_lookup" }}
   replicas: {{ .Values.pod.replicas.prometheus }}
+  selector:
+    matchLabels:
+{{ tuple $envAll "prometheus" "api" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
   template:
     metadata:
       labels:
@@ -47,15 +89,15 @@ spec:
       affinity:
 {{ tuple $envAll "prometheus" "api" | include "helm-toolkit.snippets.kubernetes_pod_anti_affinity" | indent 8 }}
       nodeSelector:
-        {{ .Values.labels.node_selector_key }}: {{ .Values.labels.node_selector_value }}
+        {{ .Values.labels.prometheus.node_selector_key }}: {{ .Values.labels.prometheus.node_selector_value | quote }}
       terminationGracePeriodSeconds: {{ .Values.pod.lifecycle.termination_grace_period.prometheus.timeout | default "30" }}
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "prometheus" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
         - name: prometheus-perms
 {{ tuple $envAll "prometheus" | include "helm-toolkit.snippets.image" | indent 10 }}
+{{ tuple $envAll $envAll.Values.pod.resources.prometheus | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           securityContext:
             runAsUser: 0
-{{ tuple $envAll $envAll.Values.pod.resources.prometheus | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           command:
             - chown
             - -R
@@ -65,8 +107,40 @@ spec:
             - name: storage
               mountPath: /var/lib/prometheus/data
       containers:
+        - name: apache-proxy
+{{ tuple $envAll "apache_proxy" | include "helm-toolkit.snippets.image" | indent 10 }}
+{{ tuple $envAll $envAll.Values.pod.resources.apache_proxy | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
+          command:
+            - /tmp/apache.sh
+            - start
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: PROMETHEUS_PORT
+              value: {{ tuple "monitoring" "internal" "api" . | include "helm-toolkit.endpoints.endpoint_port_lookup" | quote }}
+            - name: PROMETHEUS_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $promUserSecret }}
+                  key: PROMETHEUS_ADMIN_USERNAME
+            - name: PROMETHEUS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $promUserSecret }}
+                  key: PROMETHEUS_ADMIN_PASSWORD
+          volumeMounts:
+            - name: prometheus-bin
+              mountPath: /tmp/apache.sh
+              subPath: apache.sh
+              readOnly: true
+            - name: prometheus-etc
+              mountPath: /usr/local/apache2/conf/httpd.conf
+              subPath: httpd.conf
+              readOnly: true
         - name: prometheus
 {{ tuple $envAll "prometheus" | include "helm-toolkit.snippets.image" | indent 10 }}
+{{ tuple $envAll $envAll.Values.pod.resources.prometheus | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           command:
             - /tmp/prometheus.sh
             - start
@@ -76,14 +150,13 @@ spec:
                 command:
                   - /tmp/prometheus.sh
                   - stop
-{{ tuple $envAll $envAll.Values.pod.resources.prometheus | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           ports:
             - name: prom-metrics
-              containerPort: {{ .Values.network.prometheus.port }}
+              containerPort: {{ tuple "monitoring" "internal" "api" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
           readinessProbe:
             httpGet:
               path: /status
-              port: {{ .Values.network.prometheus.port }}
+              port: {{ tuple "monitoring" "internal" "api" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
             initialDelaySeconds: 30
             timeoutSeconds: 30
           volumeMounts:
@@ -91,50 +164,12 @@ spec:
               mountPath: /etc/config
             - name: rulesprometheus
               mountPath: /etc/config/rules
+            {{- range $key, $value := .Values.conf.prometheus.rules }}
             - name: prometheus-etc
-              mountPath: /etc/config/rules/alertmanager.rules
-              subPath: alertmanager.rules
+              mountPath: /etc/config/rules/{{ $key }}.rules
+              subPath: {{ $key }}.rules
               readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/etcd3.rules
-              subPath: etcd3.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/kubernetes.rules
-              subPath: kubernetes.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/kube-apiserver.rules
-              subPath: kube-apiserver.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/kube-controller-manager.rules
-              subPath: kube-controller-manager.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/kubelet.rules
-              subPath: kubelet.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/rabbitmq.rules
-              subPath: rabbitmq.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/mysql.rules
-              subPath: mysql.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/ceph.rules
-              subPath: ceph.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/openstack.rules
-              subPath: openstack.rules
-              readOnly: true
-            - name: prometheus-etc
-              mountPath: /etc/config/rules/custom.rules
-              subPath: custom.rules
-              readOnly: true
+            {{- end }}
             - name: prometheus-etc
               mountPath: /etc/config/prometheus.yml
               subPath: prometheus.yml
@@ -147,6 +182,8 @@ spec:
               mountPath: /var/lib/prometheus/data
 {{ if $mounts_prometheus.volumeMounts }}{{ toYaml $mounts_prometheus.volumeMounts | indent 12 }}{{ end }}
       volumes:
+        - name: pod-etc-apache
+          emptyDir: {}
         - name: etcprometheus
           emptyDir: {}
         - name: rulesprometheus
@@ -158,13 +195,19 @@ spec:
           configMap:
             name: prometheus-bin
             defaultMode: 0555
-        {{- if .Values.storage.enabled }}
-        - name: storage
-          persistentVolumeClaim:
-            claimName: {{ .Values.storage.pvc.name }}
-        {{- else }}
+{{ if $mounts_prometheus.volumes }}{{ toYaml $mounts_prometheus.volumes | indent 8 }}{{ end }}
+{{- if not .Values.storage.enabled }}
         - name: storage
           emptyDir: {}
-        {{- end }}
-{{ if $mounts_prometheus.volumes }}{{ toYaml $mounts_prometheus.volumes | indent 8 }}{{ end }}
+{{- else }}
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes: {{ .Values.storage.pvc.access_mode }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.requests.storage  }}
+        storageClassName: {{ .Values.storage.storage_class }}
+{{- end }}
 {{- end }}

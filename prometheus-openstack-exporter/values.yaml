@@ -18,9 +18,8 @@
 
 images:
   tags:
-    prometheus_openstack_exporter: docker.io/rakeshpatnaik/prometheus-openstack-exporter:v0.1
-    helm_tests: docker.io/kolla/ubuntu-source-kolla-toolbox:3.0.3
-    dep_check: quay.io/stackanetes/kubernetes-entrypoint:v0.2.1
+    prometheus_openstack_exporter: quay.io/attcomdev/prometheus-openstack-exporter:3231f14419f0c47547ce2551b7d884cd222104e6
+    dep_check: quay.io/stackanetes/kubernetes-entrypoint:v0.3.1
     image_repo_sync: docker.io/docker:17.07.0
     ks_user: docker.io/kolla/ubuntu-source-heat-engine:3.0.3
   pull_policy: IfNotPresent
@@ -31,8 +30,12 @@ images:
       - image_repo_sync
 
 labels:
-  node_selector_key: openstack-control-plane
-  node_selector_value: enabled
+  openstack_exporter:
+    node_selector_key: openstack-control-plane
+    node_selector_value: enabled
+  job:
+    node_selector_key: openstack-control-plane
+    node_selector_value: enabled
 
 pod:
   affinity:
@@ -59,7 +62,7 @@ pod:
         timeout: 30
   resources:
     enabled: false
-    kube_state_metrics:
+    prometheus_openstack_exporter:
       requests:
         memory: "128Mi"
         cpu: "100m"
@@ -83,28 +86,29 @@ pod:
           cpu: "2000m"
 
 dependencies:
-  ks_user:
-    services:
-      - service: identity
-        endpoint: internal
-  prometheus_openstack_exporter:
-    jobs:
-      - prometheus-openstack-exporter-ks-user
-    services:
-      - service: identity
-        endpoint: internal
-  image_repo_sync:
-    services:
-      - service: local_image_registry
-        endpoint: internal
-
-conditional_dependencies:
-  local_image_registry:
-    jobs:
-      - prometheus-openstack-exporter-image-repo-sync
-    services:
-      - service: local_image_registry
-        endpoint: node
+  dynamic:
+    common:
+      local_image_registry:
+        jobs:
+          - prometheus-openstack-exporter-image-repo-sync
+        services:
+          - endpoint: node
+            service: local_image_registry
+  static:
+    image_repo_sync:
+      services:
+        - endpoint: internal
+          service: local_image_registry
+    ks_user:
+      services:
+        - endpoint: internal
+          service: identity
+    prometheus_openstack_exporter:
+      jobs:
+        - prometheus-openstack-exporter-ks-user
+      services:
+        - endpoint: internal
+          service: identity
 
 conf:
   prometheus_openstack_exporter:
@@ -163,8 +167,8 @@ endpoints:
         user_domain_name: default
         project_domain_name: default
     hosts:
-      default: keystone-api
-      public: keystone
+      default: keystone
+      internal: keystone-api
     host_fqdn_override:
       default: null
     path:
@@ -172,10 +176,9 @@ endpoints:
     scheme:
       default: 'http'
     port:
-      admin:
-        default: 35357
       api:
         default: 80
+        internal: 5000
 
 monitoring:
   prometheus:

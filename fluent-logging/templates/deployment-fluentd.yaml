@@ -17,16 +17,11 @@ limitations under the License.
 {{- if .Values.manifests.deployment_fluentd }}
 {{- $envAll := . }}
 {{- $esUserSecret := .Values.secrets.elasticsearch.user }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.fluentd .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.fluentd -}}
-{{- end -}}
 
 {{- $mounts_fluentd := .Values.pod.mounts.fluentd.fluentd }}
 
-{{- $serviceAccountName := "fluentd"}}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{- $serviceAccountName := printf "%s-%s" .Release.Name "fluentd" }}
+{{ tuple $envAll "fluentd" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1beta1
 kind: ClusterRoleBinding
@@ -77,12 +72,17 @@ rules:
       - list
       - watch
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: fluentd
+  labels:
+{{ tuple $envAll "fluentd" "internal" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
   replicas: {{ .Values.pod.replicas.fluentd }}
+  selector:
+    matchLabels:
+{{ tuple $envAll "fluentd" "internal" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
 {{ tuple $envAll  | include "helm-toolkit.snippets.kubernetes_upgrades_deployment" | indent 2 }}
   template:
     metadata:
@@ -96,14 +96,13 @@ spec:
       affinity:
 {{ tuple $envAll "fluentd" "internal" | include "helm-toolkit.snippets.kubernetes_pod_anti_affinity" | indent 8 }}
       nodeSelector:
-        {{ .Values.labels.fluentd.node_selector_key }}: {{ .Values.labels.fluentd.node_selector_value }}
+        {{ .Values.labels.fluentd.node_selector_key }}: {{ .Values.labels.fluentd.node_selector_value | quote }}
       terminationGracePeriodSeconds: {{ .Values.pod.lifecycle.termination_grace_period.fluentd.timeout | default "30" }}
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "fluentd" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
       containers:
         - name: fluentd
-          image: {{ .Values.images.tags.fluentd }}
-          imagePullPolicy: {{ .Values.images.pull_policy }}
+{{ tuple $envAll "fluentd" | include "helm-toolkit.snippets.image" | indent 10 }}
 {{ tuple $envAll $envAll.Values.pod.resources.fluentd | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
           command:
             - /tmp/fluentd.sh
@@ -111,13 +110,20 @@ spec:
           ports:
             - name: forward
               containerPort: {{ tuple "fluentd" "internal" "service" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+            - name: metrics
+              containerPort: {{ tuple "fluentd" "internal" "metrics" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ tuple "fluentd" "internal" "service" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+            initialDelaySeconds: 20
+            periodSeconds: 10
           env:
             - name: FLUENTD_PORT
               value: {{ tuple "fluentd" "internal" "service" . | include "helm-toolkit.endpoints.endpoint_port_lookup" | quote }}
             - name: ELASTICSEARCH_HOST
               value: {{ tuple "elasticsearch" "internal" . | include "helm-toolkit.endpoints.hostname_short_endpoint_lookup" | quote }}
             - name: ELASTICSEARCH_PORT
-              value: {{ tuple "elasticsearch" "internal" "client" . | include "helm-toolkit.endpoints.endpoint_port_lookup" | quote }}
+              value: {{ tuple "elasticsearch" "internal" "http" . | include "helm-toolkit.endpoints.endpoint_port_lookup" | quote }}
             - name: ELASTICSEARCH_USERNAME
               valueFrom:
                 secretKeyRef:

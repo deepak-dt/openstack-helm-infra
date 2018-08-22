@@ -20,7 +20,7 @@
 images:
   tags:
     redis: docker.io/redis:4.0.1
-    dep_check: quay.io/stackanetes/kubernetes-entrypoint:v0.2.1
+    dep_check: quay.io/stackanetes/kubernetes-entrypoint:v0.3.1
     image_repo_sync: docker.io/docker:17.07.0
   pull_policy: IfNotPresent
   local_registry:
@@ -65,27 +65,32 @@ pod:
           cpu: "2000m"
 
 labels:
-  node_selector_key: openstack-control-plane
-  node_selector_value: enabled
+  redis:
+    node_selector_key: openstack-control-plane
+    node_selector_value: enabled
+  job:
+    node_selector_key: openstack-control-plane
+    node_selector_value: enabled
 
 network:
   port: 6379
 
 dependencies:
-  redis:
-    services: null
-  image_repo_sync:
-    services:
-      - service: local_image_registry
-        endpoint: internal
-
-conditional_dependencies:
-  local_image_registry:
-    jobs:
-      - redis-image-repo-sync
-    services:
-      - service: local_image_registry
-        endpoint: node
+  dynamic:
+    common:
+      local_image_registry:
+        jobs:
+          - redis-image-repo-sync
+        services:
+          - endpoint: node
+            service: local_image_registry
+  static:
+    image_repo_sync:
+      services:
+        - endpoint: internal
+          service: local_image_registry
+    redis:
+      services: null
 
 endpoints:
   cluster_domain_suffix: cluster.local

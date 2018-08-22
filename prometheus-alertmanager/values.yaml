@@ -20,7 +20,7 @@
 images:
   tags:
     alertmanager: docker.io/prom/alertmanager:v0.11.0
-    dep_check: quay.io/stackanetes/kubernetes-entrypoint:v0.2.1
+    dep_check: quay.io/stackanetes/kubernetes-entrypoint:v0.3.1
     image_repo_sync: docker.io/docker:17.07.0
   pull_policy: IfNotPresent
   local_registry:
@@ -30,16 +30,20 @@ images:
       - image_repo_sync
 
 labels:
-  node_selector_key: openstack-control-plane
-  node_selector_value: enabled
+  alertmanager:
+    node_selector_key: openstack-control-plane
+    node_selector_value: enabled
+  job:
+    node_selector_key: openstack-control-plane
+    node_selector_value: enabled
 
 pod:
   affinity:
-      anti:
-        type:
-          default: preferredDuringSchedulingIgnoredDuringExecution
-        topologyKey:
-          default: kubernetes.io/hostname
+    anti:
+      type:
+        default: preferredDuringSchedulingIgnoredDuringExecution
+      topologyKey:
+        default: kubernetes.io/hostname
   mounts:
     alertmanager:
       alertmanager:
@@ -97,6 +101,13 @@ endpoints:
       discovery: alertmanager-discovery
     host_fqdn_override:
       default: null
+      # NOTE(srwilkers): this chart supports TLS for fqdn over-ridden public
+      # endpoints using the following format:
+      # public:
+      #   host: null
+      #   tls:
+      #     crt: null
+      #     key: null
     path:
       default: null
     scheme:
@@ -109,37 +120,45 @@ endpoints:
         default: 6783
 
 dependencies:
-  alertmanager:
-    services: null
-  image_repo_sync:
-    services:
-      - service: local_image_registry
-        endpoint: internal
-
-conditional_dependencies:
-  local_image_registry:
-    jobs:
-      - alertmanager-image-repo-sync
-    services:
-      - service: local_image_registry
-        endpoint: node
+  dynamic:
+    common:
+      local_image_registry:
+        jobs:
+          - alertmanager-image-repo-sync
+        services:
+          - endpoint: node
+            service: local_image_registry
+  static:
+    alertmanager:
+      services: null
+    image_repo_sync:
+      services:
+        - endpoint: internal
+          service: local_image_registry
 
 network:
   alertmanager:
     ingress:
       public: true
-      proxy_body_size: 1024M
+      classes:
+        namespace: "nginx"
+        cluster: "nginx-cluster"
+      annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /
     node_port:
       enabled: false
       port: 30903
-    port: 9093
-    mesh_port: 6783
+
+secrets:
+  tls:
+    alerts:
+      alertmanager:
+        public: alerts-tls-public
 
 storage:
   enabled: true
   pvc:
-    name: alertmanager-pvc
-    access_mode: ReadWriteMany
+    access_mode: [ "ReadWriteOnce" ]
   requests:
     storage: 5Gi
   storage_class: general
@@ -150,7 +169,7 @@ manifests:
   configmap_etc: true
   ingress: true
   job_image_repo_sync: true
-  pvc: true
+  secret_ingress_tls: true
   service: true
   service_discovery: true
   service_ingress: true
@@ -175,7 +194,7 @@ conf:
       hipchat_api_url: 'https://hipchat.foobar.org/'
     # The directory from which notification templates are read.
     templates:
-    - '/etc/alertmanager/template/*.tmpl'
+      - '/etc/alertmanager/template/*.tmpl'
     # The root route on which each incoming alert enters.
     route:
       # The labels by which incoming alerts are grouped together. For example,
@@ -203,78 +222,79 @@ conf:
       # overwritten on each.
       # The child route trees.
       routes:
-      # This routes performs a regular expression match on alert labels to
-      # catch alerts that are related to a list of services.
-      - match_re:
-          service: ^(foo1|foo2|baz)$
-        receiver: team-X-mails
-        # The service has a sub-route for critical alerts, any alerts
-        # that do not match, i.e. severity != critical, fall-back to the
-        # parent node and are sent to 'team-X-mails'
-        routes:
+        # This routes performs a regular expression match on alert
+        # labels to catch alerts that are related to a list of
+        # services.
+        - match_re:
+            service: ^(foo1|foo2|baz)$
+          receiver: team-X-mails
+          # The service has a sub-route for critical alerts, any alerts
+          # that do not match, i.e. severity != critical, fall-back to the
+          # parent node and are sent to 'team-X-mails'
+          routes:
+            - match:
+                severity: critical
+              receiver: team-X-pager
         - match:
-            severity: critical
-          receiver: team-X-pager
-      - match:
-          service: files
-        receiver: team-Y-mails
-        routes:
+            service: files
+          receiver: team-Y-mails
+          routes:
+            - match:
+                severity: critical
+              receiver: team-Y-pager
+        # This route handles all alerts coming from a database service. If there's
+        # no team to handle it, it defaults to the DB team.
         - match:
-            severity: critical
-          receiver: team-Y-pager
-      # This route handles all alerts coming from a database service. If there's
-      # no team to handle it, it defaults to the DB team.
-      - match:
-          service: database
-        receiver: team-DB-pager
-        # Also group alerts by affected database.
-        group_by:
-          - alertname
-          - cluster
-          - database
-        routes:
-        - match:
-            owner: team-X
-          receiver: team-X-pager
-        - match:
-            owner: team-Y
-          receiver: team-Y-pager
+            service: database
+          receiver: team-DB-pager
+          # Also group alerts by affected database.
+          group_by:
+            - alertname
+            - cluster
+            - database
+          routes:
+            - match:
+                owner: team-X
+              receiver: team-X-pager
+            - match:
+                owner: team-Y
+              receiver: team-Y-pager
     # Inhibition rules allow to mute a set of alerts given that another alert is
     # firing.
     # We use this to mute any warning-level notifications if the same alert is
     # already critical.
     inhibit_rules:
-    - source_match:
-        severity: 'critical'
-      target_match:
-        severity: 'warning'
-      # Apply inhibition if the alertname is the same.
-      equal:
-        - alertname
-        - cluster
-        - service
+      - source_match:
+          severity: 'critical'
+        target_match:
+          severity: 'warning'
+        # Apply inhibition if the alertname is the same.
+        equal:
+          - alertname
+          - cluster
+          - service
     receivers:
-    - name: 'team-X-mails'
-      email_configs:
-      - to: 'team-X+alerts@example.org'
-    - name: 'team-X-pager'
-      email_configs:
-      - to: 'team-X+alerts-critical@example.org'
-      pagerduty_configs:
-      - service_key: <team-X-key>
-    - name: 'team-Y-mails'
-      email_configs:
-      - to: 'team-Y+alerts@example.org'
-    - name: 'team-Y-pager'
-      pagerduty_configs:
-      - service_key: <team-Y-key>
-    - name: 'team-DB-pager'
-      pagerduty_configs:
-      - service_key: <team-DB-key>
-    - name: 'team-X-hipchat'
-      hipchat_configs:
-      - auth_token: <auth_token>
-        room_id: 85
-        message_format: html
-        notify: true
+      - name: 'team-X-mails'
+        email_configs:
+          - to: 'team-X+alerts@example.org'
+      - name: 'team-X-pager'
+        email_configs:
+          - to: 'team-X+alerts-critical@example.org'
+        pagerduty_configs:
+          - service_key: <team-X-key>
+      - name: 'team-Y-mails'
+        email_configs:
+          - to: 'team-Y+alerts@example.org'
+      - name: 'team-Y-pager'
+        pagerduty_configs:
+          - service_key: <team-Y-key>
+      - name: 'team-DB-pager'
+        pagerduty_configs:
+          - service_key: <team-DB-key>
+      - name: 'team-X-hipchat'
+        hipchat_configs:
+          - auth_token: <auth_token>
+            room_id: 85
+            message_format: html
+            notify: true
   alertmanager_templates: null

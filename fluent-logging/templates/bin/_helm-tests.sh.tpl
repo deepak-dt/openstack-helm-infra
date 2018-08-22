@@ -22,7 +22,7 @@ set -ex
 # the logstash-* index via the fluent-elasticsearch plugin
 function check_logstash_index () {
   total_hits=$(curl -K- <<< "--user ${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" \
-              -XGET "${ELASTICSEARCH_ENDPOINT}/logstash-*/fluentd/_search?pretty" -H 'Content-Type: application/json' \
+              -XGET "${ELASTICSEARCH_ENDPOINT}/logstash-*/_search?pretty" -H 'Content-Type: application/json' \
               | python -c "import sys, json; print json.load(sys.stdin)['hits']['total']")
   if [ "$total_hits" -gt 0 ]; then
      echo "PASS: Successful hits on logstash-* index, provided by fluentd!"
@@ -36,7 +36,7 @@ function check_logstash_index () {
 # prefix via the fluent-kubernetes plugin
 function check_kubernetes_tag () {
   total_hits=$(curl -K- <<< "--user ${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" \
-              -XGET "${ELASTICSEARCH_ENDPOINT}/logstash-*/fluentd/_search?q=tag:kube.*" -H 'Content-Type: application/json' \
+              -XGET "${ELASTICSEARCH_ENDPOINT}/logstash-*/_search?q=tag:kube.*" -H 'Content-Type: application/json' \
               | python -c "import sys, json; print json.load(sys.stdin)['hits']['total']")
   if [ "$total_hits" -gt 0 ]; then
      echo "PASS: Successful hits on logstash-* index, provided by fluentd!"
@@ -46,7 +46,28 @@ function check_kubernetes_tag () {
   fi
 }
 
+{{ if and (.Values.manifests.job_elasticsearch_template) (not (empty .Values.conf.templates)) }}
+# Tests whether fluent-logging has successfully generated the elasticsearch index mapping
+# templates defined by values.yaml
+function check_templates () {
+  {{ range $template, $fields := .Values.conf.templates }}
+  {{$template}}_total_hits=$(curl -K- <<< "--user ${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" \
+              -XGET "${ELASTICSEARCH_ENDPOINT}/_template/{{$template}}" -H 'Content-Type: application/json' \
+              | python -c "import sys, json; print len(json.load(sys.stdin))")
+  if [ "${{$template}}_total_hits" -gt 0 ]; then
+     echo "PASS: Successful hits on {{$template}} template, provided by fluent-logging!"
+  else
+     echo "FAIL: No hits on query for {{$template}} template! Exiting";
+     exit 1;
+  fi
+  {{ end }}
+}
+{{ end }}
+
 # Sleep for at least the buffer flush time to allow for indices to be populated
 sleep 30
+{{ if and (.Values.manifests.job_elasticsearch_template) (not (empty .Values.conf.templates)) }}
+check_templates
+{{ end }}
 check_logstash_index
 check_kubernetes_tag

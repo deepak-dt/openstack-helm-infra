@@ -20,22 +20,21 @@ limitations under the License.
 {{- if and (.Values.conf.elasticsearch.repository.enabled) (empty .Values.conf.elasticsearch.config.path.repo) -}}
 {{- set .Values.conf.elasticsearch.config.path "repo" .Values.conf.elasticsearch.repository.location -}}
 {{- end -}}
+
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: elasticsearch-etc
 data:
-  httpd.conf: |+
-{{- tuple .Values.conf.apache.httpd "etc/_httpd.conf.tpl" . | include "helm-toolkit.utils.configmap_templater" }}
-  elasticsearch-host.conf: |+
-{{- tuple .Values.conf.apache.host "etc/_elasticsearch-host.conf.tpl" . | include "helm-toolkit.utils.configmap_templater" }}
-  elasticsearch.yml: |+
+  elasticsearch.yml: |
 {{ toYaml .Values.conf.elasticsearch.config | indent 4 }}
-  log4j2.properties: |+
+  log4j2.properties: |
 {{- tuple .Values.conf.elasticsearch "etc/_log4j2.properties.tpl" . | include "helm-toolkit.utils.configmap_templater" }}
-  action_file.yml: |+
+  action_file.yml: |
 {{ toYaml .Values.conf.curator.action_file | indent 4 }}
-  config.yml: |+
+  config.yml: |
 {{ toYaml .Values.conf.curator.config | indent 4 }}
+#NOTE(portdirect): this must be last, to work round helm ~2.7 bug.
+{{- include "helm-toolkit.snippets.values_template_renderer" (dict "envAll" $envAll "template" .Values.conf.httpd "key" "httpd.conf") | indent 2 }}
 {{- end }}

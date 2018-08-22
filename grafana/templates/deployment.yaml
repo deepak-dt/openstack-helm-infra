@@ -16,23 +16,23 @@ limitations under the License.
 
 {{- if .Values.manifests.deployment }}
 {{- $envAll := . }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.grafana .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.grafana -}}
-{{- end -}}
 
 {{- $mounts_grafana := .Values.pod.mounts.grafana.grafana }}
 
 {{- $serviceAccountName := "grafana" }}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{ tuple $envAll "grafana" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana
+  labels:
+{{ tuple $envAll "grafana" "dashboard" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
   replicas: {{ .Values.pod.replicas.grafana }}
+  selector:
+    matchLabels:
+{{ tuple $envAll "grafana" "dashboard" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
 {{ tuple $envAll | include "helm-toolkit.snippets.kubernetes_upgrades_deployment" | indent 2 }}
   template:
     metadata:
@@ -44,9 +44,9 @@ spec:
     spec:
       serviceAccountName: {{ $serviceAccountName }}
       nodeSelector:
-        {{ .Values.labels.node_selector_key }}: {{ .Values.labels.node_selector_value }}
+        {{ .Values.labels.grafana.node_selector_key }}: {{ .Values.labels.grafana.node_selector_value | quote }}
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "grafana" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container"  | indent 8 }}
       containers:
         - name: grafana
 {{ tuple $envAll "grafana" | include "helm-toolkit.snippets.image" | indent 10 }}
@@ -56,11 +56,11 @@ spec:
             - start
           ports:
             - name: dashboard
-              containerPort: {{ .Values.network.grafana.port }}
+              containerPort: {{ tuple "grafana" "internal" "grafana" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
           readinessProbe:
             httpGet:
               path: /login
-              port: 3000
+              port: {{ tuple "grafana" "internal" "grafana" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
             initialDelaySeconds: 30
             timeoutSeconds: 30
           env:
@@ -74,26 +74,41 @@ spec:
                 secretKeyRef:
                   name: grafana-admin-creds
                   key: GRAFANA_ADMIN_PASSWORD
+            - name: PROMETHEUS_URL
+              value: {{ tuple "monitoring" "internal" "api" $envAll | include "helm-toolkit.endpoints.keystone_endpoint_uri_lookup" }}
           volumeMounts:
-          - name: pod-etc-grafana
-            mountPath: /etc/grafana
-          - name: grafana-bin
-            mountPath: /tmp/grafana.sh
-            subPath: grafana.sh
-            readOnly: true
-          - name: grafana-etc
-            mountPath: /etc/grafana/grafana.ini
-            subPath: grafana.ini
-          - name: data
-            mountPath: /var/lib/grafana/data
-          {{- range $key, $value := .Values.conf.dashboards }}
-          - name: grafana-etc
-            mountPath: /var/lib/grafana/dashboards/{{$key}}.json
-            subPath: {{$key}}.json
-          {{- end }}
-{{ if $mounts_grafana.volumeMounts }}{{ toYaml $mounts_grafana.volumeMounts | indent 10 }}{{ end }}
+            - name: pod-etc-grafana
+              mountPath: /etc/grafana
+            - name: pod-provisioning-grafana
+              mountPath: {{ .Values.conf.grafana.paths.provisioning }}
+            - name: grafana-bin
+              mountPath: /tmp/grafana.sh
+              subPath: grafana.sh
+              readOnly: true
+            - name: grafana-etc
+              mountPath: {{ .Values.conf.grafana.paths.provisioning }}/dashboards/dashboards.yaml
+              subPath: dashboards.yaml
+            - name: grafana-etc
+              mountPath: {{ .Values.conf.grafana.paths.provisioning }}/datasources/datasources.yaml
+              subPath: datasources.yaml
+            - name: grafana-etc
+              mountPath: /etc/grafana/grafana.ini
+              subPath: grafana.ini
+            - name: grafana-etc
+              mountPath: /etc/grafana/ldap.toml
+              subPath: ldap.toml
+            - name: data
+              mountPath: /var/lib/grafana/data
+            {{- range $key, $value := .Values.conf.dashboards }}
+            - name: grafana-etc
+              mountPath: /var/lib/grafana/dashboards/{{$key}}.json
+              subPath: {{$key}}.json
+            {{- end }}
+{{ if $mounts_grafana.volumeMounts }}{{ toYaml $mounts_grafana.volumeMounts | indent 12 }}{{ end }}
       volumes:
         - name: pod-etc-grafana
+          emptyDir: {}
+        - name: pod-provisioning-grafana
           emptyDir: {}
         - name: grafana-bin
           configMap:

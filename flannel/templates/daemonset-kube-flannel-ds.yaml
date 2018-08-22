@@ -16,14 +16,9 @@ limitations under the License.
 
 {{- if .Values.manifests.daemonset_kube_flannel_ds }}
 {{- $envAll := . }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.flannel .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.flannel -}}
-{{- end -}}
 
-{{- $serviceAccountName := "flannel"}}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{- $serviceAccountName := printf "%s-%s" .Release.Name "flannel"}}
+{{ tuple $envAll "flannel" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1beta1
@@ -63,7 +58,7 @@ subjects:
   name: {{ $serviceAccountName }}
   namespace: {{ .Release.Namespace }}
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: kube-flannel-ds
@@ -72,6 +67,11 @@ metadata:
     app: flannel
 {{ tuple $envAll "flannel" "node" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
+  selector:
+    matchLabels:
+      tier: node
+      app: flannel
+{{ tuple $envAll "flannel" "node" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
   template:
     metadata:
       labels:
@@ -88,13 +88,13 @@ spec:
           effect: NoSchedule
       serviceAccountName: {{ $serviceAccountName }}
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "flannel" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container"  | indent 8 }}
       containers:
         - name: kube-flannel
 {{ tuple $envAll "flannel" | include "helm-toolkit.snippets.image" | indent 10 }}
-          command: [ "/opt/bin/flanneld", "--ip-masq", "--kube-subnet-mgr" ]
           securityContext:
             privileged: true
+          command: [ "/opt/bin/flanneld", "--ip-masq", "--kube-subnet-mgr" ]
           env:
             - name: POD_NAME
               valueFrom:

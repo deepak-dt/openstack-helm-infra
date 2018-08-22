@@ -16,21 +16,34 @@ limitations under the License.
 
 {{- if .Values.manifests.daemonset }}
 {{- $envAll := . }}
-{{- if .Values.images.local_registry.active -}}
-{{- $_ := set .Values "pod_dependency" (merge .Values.dependencies.node_exporter .Values.conditional_dependencies.local_image_registry) -}}
-{{- else -}}
-{{- $_ := set .Values "pod_dependency" .Values.dependencies.node_exporter -}}
-{{- end -}}
 
-{{- $serviceAccountName := "node-exporter"}}
-{{ tuple $envAll $envAll.Values.pod_dependency $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
+{{- $serviceAccountName := printf "%s-%s" .Release.Name "node-exporter"}}
+{{ tuple $envAll "node_exporter" $serviceAccountName | include "helm-toolkit.snippets.kubernetes_pod_rbac_serviceaccount" }}
 ---
-apiVersion: extensions/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: run-node-exporter
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: node-exporter
   namespace: {{ .Values.endpoints.node_metrics.namespace }}
+  labels:
+{{ tuple $envAll "node_exporter" "metrics" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
 spec:
+  selector:
+    matchLabels:
+{{ tuple $envAll "node_exporter" "metrics" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
 {{ tuple $envAll "node_exporter" | include "helm-toolkit.snippets.kubernetes_upgrades_daemonset" | indent 2 }}
   template:
     metadata:
@@ -40,19 +53,26 @@ spec:
     spec:
       serviceAccountName: {{ $serviceAccountName }}
       nodeSelector:
-        {{ .Values.labels.node_selector_key }}: {{ .Values.labels.node_selector_value }}
+        {{ .Values.labels.node_exporter.node_selector_key }}: {{ .Values.labels.node_exporter.node_selector_value | quote }}
       hostNetwork: true
       hostPID: true
       initContainers:
-{{ tuple $envAll .Values.pod_dependency list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{ tuple $envAll "node_exporter" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
       containers:
         - name: node-exporter
 {{ tuple $envAll "node_exporter" | include "helm-toolkit.snippets.image" | indent 10 }}
+{{ tuple $envAll $envAll.Values.pod.resources.node_exporter | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
+          command:
+            - /tmp/node-exporter.sh
           ports:
             - name: metrics
-              containerPort: {{ .Values.network.node_exporter.port }}
-              hostPort: {{ .Values.network.node_exporter.port }}
-{{ tuple $envAll $envAll.Values.pod.resources.node_exporter | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
+              containerPort: {{ tuple "node_metrics" "internal" "metrics" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+              hostPort: {{ tuple "node_metrics" "internal" "metrics" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+          readinessProbe:
+            httpGet:
+              port: {{ tuple "node_metrics" "internal" "metrics" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
+            initialDelaySeconds: 20
+            periodSeconds: 10
           volumeMounts:
             - name: proc
               mountPath: /host/proc
@@ -60,6 +80,10 @@ spec:
             - name: sys
               mountPath: /host/sys
               readOnly:  true
+            - name: node-exporter-bin
+              mountPath: /tmp/node-exporter.sh
+              subPath: node-exporter.sh
+              readOnly: true
       volumes:
         - name: proc
           hostPath:
@@ -67,4 +91,8 @@ spec:
         - name: sys
           hostPath:
             path: /sys
+        - name: node-exporter-bin
+          configMap:
+            name: node-exporter-bin
+            defaultMode: 0555
 {{- end }}

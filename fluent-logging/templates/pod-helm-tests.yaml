@@ -22,6 +22,8 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: "{{.Release.Name}}-test"
+  labels:
+{{ tuple $envAll "fluent-logging" "test" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
   annotations:
     "helm.sh/hook": test-success
 spec:
@@ -29,6 +31,7 @@ spec:
   containers:
     - name: {{.Release.Name}}-helm-tests
 {{ tuple $envAll "helm_tests" | include "helm-toolkit.snippets.image" | indent 6 }}
+{{ tuple $envAll $envAll.Values.pod.resources.jobs.tests | include "helm-toolkit.snippets.kubernetes_resources" | indent 6 }}
       command:
       - /tmp/helm-tests.sh
       env:
@@ -43,7 +46,7 @@ spec:
             name: {{ $esUserSecret }}
             key: ELASTICSEARCH_PASSWORD
       - name: ELASTICSEARCH_ENDPOINT
-        value: {{ tuple "elasticsearch" "internal" "client" . | include "helm-toolkit.endpoints.host_and_port_endpoint_uri_lookup" }}
+        value: {{ tuple "elasticsearch" "internal" "http" . | include "helm-toolkit.endpoints.host_and_port_endpoint_uri_lookup" }}
       volumeMounts:
       - name: fluent-logging-bin
         mountPath: /tmp/helm-tests.sh
