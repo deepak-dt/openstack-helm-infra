@@ -37,6 +37,10 @@
               mkdir -p "{{ logs_dir }}/pod-logs/${NAMESPACE}/${POD}"
               kubectl logs ${POD} -n ${NAMESPACE} -c ${CONTAINER} > "{{ logs_dir }}/pod-logs/${NAMESPACE}/${POD}/${CONTAINER}.txt"
             done
+            if [ ${POD} = 'shaker-run-tests' ]; then
+              kubectl exec -it ${POD} -n ${NAMESPACE} cat /tmp/shaker-result.html > "{{ logs_dir }}/pod-logs/${NAMESPACE}/${POD}/shaker-result.html"
+              kubectl exec -it ${POD} -n ${NAMESPACE} cat /tmp/shaker-result.json > "{{ logs_dir }}/pod-logs/${NAMESPACE}/${POD}/shaker-result.json"
+            fi
           }
           export -f get_pod_logs
           get_namespaces | \
